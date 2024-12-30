@@ -8,7 +8,6 @@
 
 #![no_std]
 #![no_main]
-
 use alloc::{boxed::Box, sync::Arc};
 use embassy_executor::Spawner;
 use embassy_futures::select;
@@ -16,6 +15,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, s
 use embassy_time::{Delay, Duration, Instant, Timer};
 use embedded_storage::{ReadStorage, Storage};
 use esp_backtrace as _;
+use esp_hal::prelude::*;
 use esp_hal::{
     gpio::{AnyPin, Input, Level, Output, Pull},
     i2c::master::{Config, I2c},
@@ -52,22 +52,27 @@ struct FlashData {
     gyro_offset: [f32; 3],
 }
 
-#[esp_hal_embassy::main]
+#[main]
 async fn main(_spawner: Spawner) {
     esp_println::logger::init_logger_from_env();
+    println!("Initialising...");
+
+    println!("Peripherals...");
     let peripherals = esp_hal::init(esp_hal::Config::default());
+
+    println!("Heap...");
     init_heap();
 
-    println!("Init!");
-
+    println!("Embassy...");
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_hal_embassy::init(timg0.timer0);
 
-    let mut led = Output::new(AnyPin::from(peripherals.GPIO0), Level::Low);
-    let mut vibration_motor = Output::new(AnyPin::from(peripherals.GPIO1), Level::Low);
+    println!("GPIO...");
+    let mut led = Output::new(AnyPin::from(peripherals.GPIO25), Level::Low);
+    let mut vibration_motor = Output::new(AnyPin::from(peripherals.GPIO26), Level::Low);
+    let calibration_button = Input::new(AnyPin::from(peripherals.GPIO27), Pull::Up);
 
-    let calibration_button = Input::new(AnyPin::from(peripherals.GPIO2), Pull::Up);
-
+    println!("Flash...");
     // Initialize the ESP32 flash memory to store the calibration data
     let mut flash = FlashStorage::new();
 
@@ -95,9 +100,10 @@ async fn main(_spawner: Spawner) {
 
     {
         let mut mpu = mpu.lock().await;
-        mpu.init(&mut delay).unwrap();
+        mpu.init(&mut delay).expect("MPU6050 init failed");
 
-        mpu.set_gyro_range(GyroRange::D250).unwrap();
+        mpu.set_gyro_range(GyroRange::D250)
+            .expect("set_gyro_range failed");
     }
     // Vibrate twice to tell the user that the device is ready
     led.set_high();

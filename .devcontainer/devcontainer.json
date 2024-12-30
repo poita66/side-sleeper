@@ -44,5 +44,9 @@
     3333
   ],
   "workspaceMount": "source=${localWorkspaceFolder},target=/home/esp/side_sleeper,type=bind,consistency=cached",
-  "workspaceFolder": "/home/esp/side_sleeper"
+  "workspaceFolder": "/home/esp/side_sleeper",
+  "runArgs": [
+    // Add /dev/ttyUSB0
+    "--device=/dev/ttyUSB0"
+  ]
 }
