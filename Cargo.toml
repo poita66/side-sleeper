@@ -19,11 +19,30 @@ esp-alloc = { version = "0.5.0" }
 embassy-time = "0.3.2"
 embassy-executor = "0.6.3"
 embassy-sync = "0.6.1"
-esp-hal-embassy = { version = "0.5.0", features = ["esp32", "integrated-timers", "log"] }
+esp-hal-embassy = { version = "0.5.0", features = [
+    "esp32",
+    "integrated-timers",
+    "log",
+
+] }
+embedded-hal = "1.0.0"
+embassy-futures = { version = "0.1.1", features = ["log"] }
+mpu6050 = "0.1.6"
+embedded-hal-async = "1.0.0"
+async-trait = "0.1.83"
+embedded-storage = "0.3.1"
+esp-storage = { version = "0.4.0", features = ["esp32"] }
+postcard = { version = "1.1.1", features = ["alloc", "postcard-derive"] }
+serde = { version = "1.0.217", default-features = false, features = ["alloc", "derive"] }
+
+
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
 opt-level = "s"
+
+[profile.dev.package.esp-storage]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1        # LLVM can perform better optimizations using a single thread
