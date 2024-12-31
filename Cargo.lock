@@ -1114,8 +1114,10 @@ dependencies = [
  "esp-hal-embassy",
  "esp-println",
  "esp-storage",
+ "fugit",
  "log",
  "mpu6050",
+ "num-traits",
  "postcard",
  "serde",
 ]

@@ -17,14 +17,14 @@ use embedded_storage::{ReadStorage, Storage};
 use esp_backtrace as _;
 use esp_hal::prelude::*;
 use esp_hal::{
-    gpio::{AnyPin, Input, Level, Output, Pull},
+    gpio::{Input, Level, Output, Pull},
     i2c::master::{Config, I2c},
     timer::timg::TimerGroup,
 };
 use esp_println::println;
 use esp_storage::FlashStorage;
 use log::info;
-use mpu6050::{device::GyroRange, Mpu6050};
+use mpu6050::Mpu6050;
 use postcard::from_bytes;
 use serde::{Deserialize, Serialize};
 
@@ -44,12 +44,12 @@ fn init_heap() {
     }
 }
 
-type CalibratingSignal = Arc<Signal<CriticalSectionRawMutex, ()>>;
+type CalibratingSignal = Arc<Signal<CriticalSectionRawMutex, FlashData>>;
 type CalibratingBool = Arc<Mutex<CriticalSectionRawMutex, bool>>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct FlashData {
-    gyro_offset: [f32; 3],
+    acc_offset: [f32; 3],
 }
 
 #[main]
@@ -68,9 +68,9 @@ async fn main(_spawner: Spawner) {
     esp_hal_embassy::init(timg0.timer0);
 
     println!("GPIO...");
-    let mut led = Output::new(AnyPin::from(peripherals.GPIO25), Level::Low);
-    let mut vibration_motor = Output::new(AnyPin::from(peripherals.GPIO26), Level::Low);
-    let calibration_button = Input::new(AnyPin::from(peripherals.GPIO27), Pull::Up);
+    let mut led = Output::new(peripherals.GPIO0, Level::Low);
+    let mut vibration_motor = Output::new(peripherals.GPIO26, Level::Low);
+    let calibration_button = Input::new(peripherals.GPIO27, Pull::Up);
 
     println!("Flash...");
     // Initialize the ESP32 flash memory to store the calibration data
@@ -79,31 +79,40 @@ async fn main(_spawner: Spawner) {
     let flash_addr = 0x9000;
     println!("Flash size = {}", flash.capacity());
     let mut data = FlashData {
-        gyro_offset: [0.0, 0.0, 0.0],
+        acc_offset: [0.0, 0.0, 0.0],
     };
 
     // Read the calibration data from flash
     let mut buffer = [0u8; core::mem::size_of::<FlashData>()];
     if let Ok(()) = flash.read(flash_addr, &mut buffer) {
         data = from_bytes(&buffer).unwrap();
-        println!("Read flash data: {:?}", data.gyro_offset);
     }
 
-    // Initialize the gyroscope (MPU6050)
-    let gyroscope = I2c::new(peripherals.I2C0, Config::default());
+    println!("Read flash data: {:?}", data.acc_offset);
 
-    let gyro_interrupt = Input::new(AnyPin::from(peripherals.GPIO3), Pull::Up);
+    // Initialize the accscope (MPU6050)
+    let accscope = I2c::new(
+        peripherals.I2C0,
+        Config {
+            frequency: fugit::Rate::<u32, 1, 1>::kHz(100),
+            ..Default::default()
+        },
+    )
+    .with_sda(peripherals.GPIO33)
+    .with_scl(peripherals.GPIO32);
+
+    let acc_interrupt = Input::new((peripherals.GPIO25), Pull::Up);
 
     let mut delay = Delay;
-    let mut mpu: Arc<Mutex<CriticalSectionRawMutex, Mpu6050<I2c<'_, esp_hal::Blocking>>>> =
-        Arc::new(Mutex::new(Mpu6050::new(gyroscope)));
+    let mpu: Arc<Mutex<CriticalSectionRawMutex, Mpu6050<I2c<'_, esp_hal::Blocking>>>> =
+        Arc::new(Mutex::new(Mpu6050::new(accscope)));
 
     {
         let mut mpu = mpu.lock().await;
         mpu.init(&mut delay).expect("MPU6050 init failed");
 
-        mpu.set_gyro_range(GyroRange::D250)
-            .expect("set_gyro_range failed");
+        mpu.set_accel_range(mpu6050::device::AccelRange::G16)
+            .expect("set_acc_range failed");
     }
     // Vibrate twice to tell the user that the device is ready
     led.set_high();
@@ -121,7 +130,7 @@ async fn main(_spawner: Spawner) {
     led.set_low();
 
     let calibrate_signal: CalibratingSignal =
-        Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
+        Arc::new(Signal::<CriticalSectionRawMutex, FlashData>::new());
 
     let calibrating: CalibratingBool = Arc::new(Mutex::new(false));
 
@@ -132,16 +141,19 @@ async fn main(_spawner: Spawner) {
             calibrate_signal.clone(),
             calibrating.clone(),
             mpu.clone(),
+            flash,
+            data.clone(),
         ))
         .unwrap();
 
     _spawner
         .spawn(check_orientation_and_vibrate(
             mpu.clone(),
-            Box::new(gyro_interrupt),
+            Box::new(acc_interrupt),
             Box::new(vibration_motor),
             calibrate_signal.clone(),
             calibrating.clone(),
+            data,
         ))
         .unwrap();
 }
@@ -152,6 +164,8 @@ async fn calibrate(
     calibrating_finished: CalibratingSignal,
     calibrating: CalibratingBool,
     mpu: Arc<Mutex<CriticalSectionRawMutex, Mpu6050<I2c<'static, esp_hal::Blocking>>>>,
+    mut flash: FlashStorage,
+    mut data: FlashData,
 ) {
     // Wait for the calibration button to be pressed
     calibration_button.wait_for_high().await;
@@ -167,10 +181,29 @@ async fn calibrate(
     // Wait for 1 second to allow the user to move their hands away from the device
     Timer::after(Duration::from_secs(1)).await;
 
-    // Calibrate the gyroscope, assuming that the device is stationary and lying flat on its back
+    // Calibrate the accscope, assuming that the device is stationary and lying flat on its back
     {
         let mut mpu = mpu.lock().await;
-        mpu.get_acc_angles().unwrap();
+        let mut acc_sum = [0.0, 0.0, 0.0];
+
+        for _ in 0..100 {
+            let acc = mpu.get_acc().unwrap();
+            acc_sum[0] += acc[0];
+            acc_sum[1] += acc[1];
+            acc_sum[2] += acc[2];
+
+            Timer::after(Duration::from_millis(100)).await;
+        }
+
+        data.acc_offset[0] = acc_sum[0] / 100.0;
+        data.acc_offset[1] = acc_sum[1] / 100.0;
+        data.acc_offset[2] = acc_sum[2] / 100.0;
+
+        // Write the calibration data to flash
+        let buffer = postcard::to_allocvec(&data).unwrap();
+        flash.write(0x9000, &buffer).unwrap();
+
+        info!("Calibration data: {:?}", data.acc_offset);
     }
 
     // Signal that the calibration is finished
@@ -178,20 +211,23 @@ async fn calibrate(
         let mut calibrating = calibrating.lock().await;
         *calibrating = false;
     }
-    calibrating_finished.signal(());
+    calibrating_finished.signal(data);
 }
 
 #[embassy_executor::task]
 async fn check_orientation_and_vibrate(
     mpu: Arc<Mutex<CriticalSectionRawMutex, Mpu6050<I2c<'static, esp_hal::Blocking>>>>,
-    mut gyro_interrupt: Box<Input<'static>>,
+    mut acc_interrupt: Box<Input<'static>>,
     mut vibration_motor: Box<Output<'static>>,
     calibrating_finished: CalibratingSignal,
     calibrating: CalibratingBool,
+    data: FlashData,
 ) {
     // If the device is upside down and has been for 5 seconds, vibrate in increasing intervals and intensities
     // Otherwise the device is not upside down, turn off the vibration motor
     let mut upside_down_since: Option<Instant> = None;
+
+    let mut data = data.clone();
 
     // Setup motion detection
     {
@@ -203,37 +239,42 @@ async fn check_orientation_and_vibrate(
         let is_calibrating = { *(calibrating.lock().await) };
         if is_calibrating {
             // Wait for the calibration to finish
-            calibrating_finished.wait().await;
+            data = calibrating_finished.wait().await;
         }
 
         let mut mpu = mpu.lock().await;
 
-        // Read the gyroscope data
-        let gyro = mpu.get_gyro().unwrap();
+        // Read the accscope data
+        let acc = mpu.get_acc().unwrap();
 
         // Determine if the device is upside down
-        let is_upside_down = gyro[2] - 1.0 < 0.0;
+        let z_acc = acc[2];
+        let is_upside_down = z_acc < -5.0;
 
+        info!("Acc: {:?}", z_acc);
         if is_upside_down {
+            info!("Upside down");
             if upside_down_since.is_none() {
                 upside_down_since = Some(Instant::now());
             }
         } else {
+            info!("Not upside down");
             upside_down_since = None;
         }
 
         // Vibrate if the device has been upside down for a while
         if let Some(since) = upside_down_since {
             if Instant::now() - since > Duration::from_secs(5) {
+                info!("Upside down for 5 seconds, vibrating");
                 vibration_motor.set_high();
-                Timer::after(Duration::from_millis(100)).await;
+                Timer::after(Duration::from_millis(1000)).await;
                 vibration_motor.set_low();
                 upside_down_since = None;
             }
         }
 
         // Wait for the next interrupt, or 5s, whichever comes first
-        let sig = gyro_interrupt.wait_for_low();
+        let sig = acc_interrupt.wait_for_low();
 
         let timer = Timer::after(Duration::from_millis(5000));
 
@@ -241,8 +282,8 @@ async fn check_orientation_and_vibrate(
 
         match res {
             select::Either::First(_) => {
-                // Gyro interrupt
-                info!("Gyro interrupt");
+                // Acc interrupt
+                info!("Acc interrupt");
             }
             select::Either::Second(_) => {
                 // Timeout
