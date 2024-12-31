@@ -8,11 +8,11 @@
 
 #![no_std]
 #![no_main]
-use alloc::{boxed::Box, sync::Arc};
+use alloc::sync::Arc;
 use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_sync::pubsub::{PubSubBehavior, PubSubChannel};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Delay, Duration, Instant, Timer};
 use esp_backtrace as _;
 use esp_hal::prelude::*;
@@ -22,7 +22,7 @@ use esp_hal::{
     i2c::master::{Config, I2c},
     timer::timg::TimerGroup,
 };
-use log::{debug, info};
+use log::info;
 use mpu6050::Mpu6050;
 
 extern crate alloc;
@@ -44,9 +44,9 @@ fn init_heap() {
 type PowerSignal = PubSubChannel<CriticalSectionRawMutex, (), 1, 2, 1>;
 type PowerValue = Mutex<CriticalSectionRawMutex, bool>;
 
-static POWER_SIGNAL: PowerSignal = (PubSubChannel::<CriticalSectionRawMutex, (), 1, 2, 1>::new());
+static POWER_SIGNAL: PowerSignal = PubSubChannel::<CriticalSectionRawMutex, (), 1, 2, 1>::new();
 static POWER_VALUE: PowerValue = Mutex::new(true);
-static MPU_READY: PowerSignal = (PubSubChannel::<CriticalSectionRawMutex, (), 1, 2, 1>::new());
+static MPU_READY: PowerSignal = PubSubChannel::<CriticalSectionRawMutex, (), 1, 2, 1>::new();
 
 #[main]
 async fn main(_spawner: Spawner) {
@@ -97,6 +97,9 @@ async fn main(_spawner: Spawner) {
         .unwrap();
 
     let mut fef = RtcSleepConfig::default();
+
+    fef.set_wifi_pd_en(true);
+
     let led_clone = led.clone();
     let vib = vibration_motor.clone();
     let mut sub = POWER_SIGNAL.subscriber().unwrap();
@@ -175,16 +178,7 @@ async fn init_mpu(
     let mut mpu = mpu.lock().await;
     mpu.init(&mut delay).expect("MPU6050 init failed");
 
-    // mpu.set_accel_range(mpu6050::device::AccelRange::G16)
-    //     .expect("set_acc_range failed");
-
     mpu.set_temp_enabled(true).expect("set_temp_enabled failed");
-
-    // mpu.set_clock_source(mpu6050::device::CLKSEL::EXT_32p7)
-    //     .expect("set_clock_source failed");
-
-    // mpu.set_gyro_range(GyroRange::D250)
-    //     .expect("set_gyro_range failed");
 
     info!("MPU6050 initialized");
 
