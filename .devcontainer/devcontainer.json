@@ -47,6 +47,6 @@
   "workspaceFolder": "/home/esp/side_sleeper",
   "runArgs": [
     // Add /dev/ttyUSB0
-    "--device=/dev/ttyUSB0"
+    // "--device=/dev/ttyUSB0"
   ]
 }
