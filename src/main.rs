@@ -8,7 +8,6 @@
 
 #![no_std]
 #![no_main]
-use alloc::format;
 use alloc::sync::Arc;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
@@ -29,6 +28,9 @@ use mpu6050::Mpu6050;
 
 extern crate alloc;
 use core::mem::MaybeUninit;
+
+const SLEEP_DURATION_SECS: u8 = 5;
+const UPSIDE_DOWN_THRESHOLD_SECS: u8 = 5;
 
 fn init_heap() {
     const HEAP_SIZE: usize = 32 * 1024;
@@ -133,20 +135,16 @@ async fn deactivate_vibration(
     led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
     vib: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
 ) {
-    let mut led = led_clone.lock().await;
-    let mut vibration_motor = vib.lock().await;
-    led.set_high();
-    vibration_motor.set_low();
+    led_clone.lock().await.set_high();
+    vib.lock().await.set_low();
 }
 
 async fn activate_vibration(
     led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
     vib: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
 ) {
-    let mut led = led_clone.lock().await;
-    let mut vibration_motor = vib.lock().await;
-    led.set_low();
-    vibration_motor.set_high();
+    led_clone.lock().await.set_low();
+    vib.lock().await.set_high();
 }
 
 async fn init_mpu(
@@ -168,15 +166,18 @@ async fn check_orientation_and_vibrate(
     // If the device is upside down and has been for 5 seconds, vibrate in increasing intervals and intensities
     // Otherwise the device is not upside down, turn off the vibration motor
     let mut upside_down_since: Option<Instant> = None;
-    let sleep_duration = Duration::from_secs(5);
+    let sleep_duration = Duration::from_secs(SLEEP_DURATION_SECS.into());
     let vibration_duration = Duration::from_secs(2);
-    let upside_down_threshold = Duration::from_secs(5);
+    let upside_down_threshold = Duration::from_secs(UPSIDE_DOWN_THRESHOLD_SECS.into());
 
     loop {
         let [_y_acc, _x_acc, z_acc] = {
-            let mut mpu = mpu.lock().await;
             // Read the accelerometer data
-            mpu.get_acc().map(|x| x.into()).unwrap_or([0.0, 0.0, 0.0])
+            mpu.lock()
+                .await
+                .get_acc()
+                .map(|x| x.into())
+                .unwrap_or([0.0, 0.0, 0.0])
         };
 
         // Determine if the device is upside down
@@ -213,7 +214,8 @@ async fn check_orientation_and_vibrate(
             }
         }
 
-        let mut rtc = rtc.lock().await;
-        rtc.sleep_light(&[&TimerWakeupSource::new(sleep_duration.into())]);
+        rtc.lock()
+            .await
+            .sleep_light(&[&TimerWakeupSource::new(sleep_duration.into())]);
     }
 }
