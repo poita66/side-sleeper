@@ -8,6 +8,7 @@
 
 #![no_std]
 #![no_main]
+use alloc::format;
 use alloc::sync::Arc;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
@@ -85,18 +86,15 @@ async fn main(_spawner: Spawner) {
 
     let rtc = Rtc::new(peripherals.LPWR);
 
-    let fef2 = Arc::new(Mutex::new(rtc));
+    let rtc_mutex = Arc::new(Mutex::new(rtc));
 
     _spawner
         .spawn(check_orientation_and_vibrate(
             mpu.clone(),
             vibration_motor.clone(),
-            fef2.clone(),
+            rtc_mutex.clone(),
         ))
         .unwrap();
-
-    let led_clone = led.clone();
-    let vib = vibration_motor.clone();
 
     info!("Setting MPU power high");
     mpu_power.set_high();
@@ -109,35 +107,37 @@ async fn main(_spawner: Spawner) {
 
     info!("Device ready");
 
-    // Vibrate twice to tell the user that the device is ready
+    vibrate_twice(led.clone(), vibration_motor.clone()).await;
+}
+
+async fn vibrate_twice(
+    led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
+    vib: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
+) {
+    for _ in 0..2 {
+        vibrate(Duration::from_millis(100), led_clone.clone(), vib.clone()).await;
+
+        Timer::after(Duration::from_millis(100)).await;
+    }
+}
+
+async fn vibrate(
+    duration: Duration,
+    led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
+    vib: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
+) {
     {
         let mut led = led_clone.lock().await;
         let mut vibration_motor = vib.lock().await;
         led.set_low();
         vibration_motor.set_high();
     }
-    Timer::after(Duration::from_millis(100)).await;
+    Timer::after(duration).await;
     {
         let mut led = led_clone.lock().await;
         let mut vibration_motor = vib.lock().await;
         led.set_high();
         vibration_motor.set_low();
-    }
-
-    Timer::after(Duration::from_millis(100)).await;
-
-    {
-        let mut led = led_clone.lock().await;
-        let mut vibration_motor = vib.lock().await;
-        led.set_low();
-        vibration_motor.set_high();
-    }
-    Timer::after(Duration::from_millis(100)).await;
-    {
-        let mut led = led_clone.lock().await;
-        let mut vibration_motor = vib.lock().await;
-        vibration_motor.set_low();
-        led.set_high();
     }
 }
 
@@ -160,6 +160,9 @@ async fn check_orientation_and_vibrate(
     // If the device is upside down and has been for 5 seconds, vibrate in increasing intervals and intensities
     // Otherwise the device is not upside down, turn off the vibration motor
     let mut upside_down_since: Option<Instant> = None;
+    let sleep_duration = Duration::from_secs(5);
+    let vibration_duration = Duration::from_secs(2);
+    let upside_down_threshold = Duration::from_secs(5);
 
     loop {
         let [_y_acc, _x_acc, z_acc] = {
@@ -183,25 +186,26 @@ async fn check_orientation_and_vibrate(
         }
 
         // Vibrate if the device has been upside down for a while
-        if let Some(since) = upside_down_since {
-            if Instant::now() - since > Duration::from_secs(5) {
-                info!("Upside down for 5 seconds, vibrating");
-                {
-                    let mut vibration_motor = vibration_motor.lock().await;
-                    vibration_motor.set_high();
-                }
+        if let Some(some_since) = upside_down_since {
+            let upside_down_duration = Instant::now().duration_since(some_since);
+            if upside_down_duration > upside_down_threshold {
+                info!(
+                    "Upside down for over {} seconds, vibrating",
+                    upside_down_threshold.as_secs()
+                );
 
-                Timer::after(Duration::from_millis(2000)).await;
+                vibrate(
+                    vibration_duration,
+                    vibration_motor.clone(),
+                    vibration_motor.clone(),
+                )
+                .await;
 
-                {
-                    let mut vibration_motor = vibration_motor.lock().await;
-                    vibration_motor.set_low();
-                }
                 upside_down_since = None;
             }
         }
 
         let mut rtc = rtc.lock().await;
-        rtc.sleep_light(&[&TimerWakeupSource::new(Duration::from_secs(5).into())]);
+        rtc.sleep_light(&[&TimerWakeupSource::new(sleep_duration.into())]);
     }
 }
