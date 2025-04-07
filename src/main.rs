@@ -107,15 +107,13 @@ async fn main(_spawner: Spawner) {
 
     info!("Device ready");
 
-    vibrate_twice(led.clone(), vibration_motor.clone()).await;
-}
-
-async fn vibrate_twice(
-    led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
-    vib: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
-) {
     for _ in 0..2 {
-        vibrate(Duration::from_millis(100), led_clone.clone(), vib.clone()).await;
+        vibrate(
+            Duration::from_millis(100),
+            led.clone(),
+            vibration_motor.clone(),
+        )
+        .await;
 
         Timer::after(Duration::from_millis(100)).await;
     }
@@ -126,19 +124,29 @@ async fn vibrate(
     led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
     vib: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
 ) {
-    {
-        let mut led = led_clone.lock().await;
-        let mut vibration_motor = vib.lock().await;
-        led.set_low();
-        vibration_motor.set_high();
-    }
+    activate_vibration(led_clone.clone(), vib.clone()).await;
     Timer::after(duration).await;
-    {
-        let mut led = led_clone.lock().await;
-        let mut vibration_motor = vib.lock().await;
-        led.set_high();
-        vibration_motor.set_low();
-    }
+    deactivate_vibration(led_clone.clone(), vib.clone()).await;
+}
+
+async fn deactivate_vibration(
+    led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
+    vib: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
+) {
+    let mut led = led_clone.lock().await;
+    let mut vibration_motor = vib.lock().await;
+    led.set_high();
+    vibration_motor.set_low();
+}
+
+async fn activate_vibration(
+    led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
+    vib: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
+) {
+    let mut led = led_clone.lock().await;
+    let mut vibration_motor = vib.lock().await;
+    led.set_low();
+    vibration_motor.set_high();
 }
 
 async fn init_mpu(
