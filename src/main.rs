@@ -123,8 +123,8 @@ async fn main(_spawner: Spawner) {
 
 async fn vibrate(
     duration: Duration,
-    led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
-    vib: Arc<Mutex<CriticalSectionRawMutex, Output<'static>>>,
+    led_clone: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
+    vib: Arc<Mutex<CriticalSectionRawMutex, Output<'_>>>,
 ) {
     activate_vibration(led_clone.clone(), vib.clone()).await;
     Timer::after(duration).await;
