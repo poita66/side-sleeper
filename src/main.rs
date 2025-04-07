@@ -12,6 +12,7 @@ use alloc::sync::Arc;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Delay, Duration, Instant, Timer};
+use esp_alloc::HeapRegion;
 use esp_backtrace as _;
 use esp_hal::gpio::OutputConfig;
 use esp_hal::rtc_cntl::sleep::TimerWakeupSource;
@@ -27,18 +28,23 @@ use log::info;
 use mpu6050::Mpu6050;
 
 extern crate alloc;
-use core::mem::MaybeUninit;
 
 const SLEEP_DURATION_SECS: u8 = 5;
 const UPSIDE_DOWN_THRESHOLD_SECS: u8 = 5;
 
 fn init_heap() {
     const HEAP_SIZE: usize = 32 * 1024;
-    static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
+
+    // Better approach: align and zero-initialize the memory
+    #[link_section = ".dram0.bss"]
+    static mut HEAP_MEMORY: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
     unsafe {
-        esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
-            HEAP.as_mut_ptr() as *mut u8,
+        // SAFETY: This function is only called once during initialization,
+        // before any threads are spawned, so there's no risk of data races.
+        #[allow(static_mut_refs)]
+        esp_alloc::HEAP.add_region(HeapRegion::new(
+            HEAP_MEMORY.as_mut_ptr(),
             HEAP_SIZE,
             esp_alloc::MemoryCapability::Internal.into(),
         ));
